@@ -64,7 +64,11 @@ class TabNetwork(Gtk.Box):
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         content.set_border_width(8)
-        scroll_main.add(content)
+        
+        event_bg = Gtk.EventBox()
+        event_bg.get_style_context().add_class("view")
+        event_bg.add(content)
+        scroll_main.add(event_bg)
 
         # === 1. Network Interfaces ===
         lbl_iface = Gtk.Label(label="Network Interfaces")
@@ -149,7 +153,11 @@ class TabNetwork(Gtk.Box):
 
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         content.set_border_width(8)
-        scroll_main.add(content)
+
+        event_bg = Gtk.EventBox()
+        event_bg.get_style_context().add_class("view")
+        event_bg.add(content)
+        scroll_main.add(event_bg)
 
         sg = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
@@ -177,18 +185,7 @@ class TabNetwork(Gtk.Box):
         btn_ping.connect("clicked", self._on_ping)
         row_ping.pack_start(btn_ping, False, False, 0)
 
-        self.scroll_ping = Gtk.ScrolledWindow()
-        self.scroll_ping.set_size_request(-1, 100)
-        self.scroll_ping.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self.scroll_ping.get_style_context().add_class("output-panel")
-        self.scroll_ping.set_no_show_all(True)
-        self.scroll_ping.hide()
-        content.pack_start(self.scroll_ping, False, True, 0)
 
-        self.ping_view = Gtk.TextView()
-        self.ping_view.set_editable(False)
-        self.ping_view.set_monospace(True)
-        self.scroll_ping.add(self.ping_view)
 
         # === 2. DNS Lookup ===
         sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
@@ -217,18 +214,7 @@ class TabNetwork(Gtk.Box):
         btn_dns.connect("clicked", self._on_dns_lookup)
         row_dns.pack_start(btn_dns, False, False, 0)
 
-        self.scroll_dns = Gtk.ScrolledWindow()
-        self.scroll_dns.set_size_request(-1, 80)
-        self.scroll_dns.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self.scroll_dns.get_style_context().add_class("output-panel")
-        self.scroll_dns.set_no_show_all(True)
-        self.scroll_dns.hide()
-        content.pack_start(self.scroll_dns, False, True, 0)
 
-        self.dns_view = Gtk.TextView()
-        self.dns_view.set_editable(False)
-        self.dns_view.set_monospace(True)
-        self.scroll_dns.add(self.dns_view)
 
         # === 3. Traceroute ===
         sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
@@ -262,18 +248,7 @@ class TabNetwork(Gtk.Box):
         btn_stop_trace.connect("clicked", self._on_stop_traceroute)
         row_trace.pack_start(btn_stop_trace, False, False, 0)
 
-        self.scroll_trace = Gtk.ScrolledWindow()
-        self.scroll_trace.set_size_request(-1, 120)
-        self.scroll_trace.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        self.scroll_trace.get_style_context().add_class("output-panel")
-        self.scroll_trace.set_no_show_all(True)
-        self.scroll_trace.hide()
-        content.pack_start(self.scroll_trace, False, True, 0)
 
-        self.trace_view = Gtk.TextView()
-        self.trace_view.set_editable(False)
-        self.trace_view.set_monospace(True)
-        self.scroll_trace.add(self.trace_view)
 
         # === 4. ARP Table ===
         sep3 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
@@ -312,6 +287,34 @@ class TabNetwork(Gtk.Box):
             self.arp_tree.append_column(col)
 
         scroll_arp.add(self.arp_tree)
+
+        # === Output log chung ===
+        sep_output = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        content.pack_start(sep_output, False, False, 4)
+
+        output_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        content.pack_start(output_header, False, False, 0)
+
+        lbl_output = Gtk.Label(label="Output log:")
+        lbl_output.set_halign(Gtk.Align.START)
+        lbl_output.get_style_context().add_class("section-label")
+        output_header.pack_start(lbl_output, False, False, 0)
+
+        btn_clear_output = Gtk.Button(label="Xóa log")
+        btn_clear_output.connect("clicked", self._on_clear_tools_output)
+        output_header.pack_end(btn_clear_output, False, False, 0)
+
+        scroll_output = Gtk.ScrolledWindow()
+        scroll_output.set_size_request(-1, 200)
+        scroll_output.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll_output.get_style_context().add_class("output-panel")
+        content.pack_start(scroll_output, False, True, 0)
+
+        self.tools_output_view = Gtk.TextView()
+        self.tools_output_view.set_editable(False)
+        self.tools_output_view.set_monospace(True)
+        self.tools_output_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        scroll_output.add(self.tools_output_view)
 
         self.sub_notebook.append_page(scroll_main, Gtk.Label(label="Công cụ"))
 
@@ -413,10 +416,7 @@ class TabNetwork(Gtk.Box):
 
         # Dừng ping cũ
         self._stop_ping()
-
-        # Hiện output panel và xóa output cũ
-        self.scroll_ping.show_all()
-        self.ping_view.get_buffer().set_text("")
+        self._append_tools_output(f"[PING] Đang ping {host}...")
 
         thread = threading.Thread(target=self._do_ping, args=(host,), daemon=True)
         thread.start()
@@ -436,6 +436,7 @@ class TabNetwork(Gtk.Box):
                 GLib.idle_add(self._append_ping, line.rstrip())
 
             self._ping_proc.wait()
+            GLib.idle_add(self._update_status, f"Ping {host} hoàn tất")
             self._ping_proc = None
 
         except FileNotFoundError:
@@ -444,12 +445,8 @@ class TabNetwork(Gtk.Box):
             GLib.idle_add(self._append_ping, f"Lỗi ping: {e}")
 
     def _append_ping(self, text: str) -> None:
-        """Thêm dòng vào ping output."""
-        buf = self.ping_view.get_buffer()
-        end_iter = buf.get_end_iter()
-        buf.insert(end_iter, text + "\n")
-        mark = buf.get_insert()
-        self.ping_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        """Thêm dòng vào output log chung với prefix [PING]."""
+        self._append_tools_output(f"[PING] {text}")
 
     def _stop_ping(self) -> None:
         """Dừng ping process."""
@@ -472,8 +469,7 @@ class TabNetwork(Gtk.Box):
         if not hostname:
             return
 
-        self.scroll_dns.show_all()
-        self.dns_view.get_buffer().set_text("Đang phân giải...\n")
+        self._append_tools_output(f"[DNS] Đang phân giải {hostname}...")
         thread = threading.Thread(target=self._do_dns_lookup, args=(hostname,), daemon=True)
         thread.start()
 
@@ -496,14 +492,17 @@ class TabNetwork(Gtk.Box):
 
             text = f"DNS Lookup: {hostname}\n" + "\n".join(lines) if lines else "Không có kết quả"
             GLib.idle_add(self._set_dns_text, text)
+            GLib.idle_add(self._update_status, f"DNS: {hostname} đã phân giải")
         except FileNotFoundError:
             GLib.idle_add(self._set_dns_text, "❌ Không tìm thấy backend/network_info.")
         except Exception as e:
             GLib.idle_add(self._set_dns_text, f"❌ Lỗi: {e}")
 
     def _set_dns_text(self, text: str) -> None:
-        """Cập nhật DNS view."""
-        self.dns_view.get_buffer().set_text(text)
+        """Thêm kết quả DNS vào output log chung."""
+        for line in text.split("\n"):
+            if line.strip():
+                self._append_tools_output(f"[DNS] {line}")
 
     # ─── Traceroute ──────────────────────────────────────────
 
@@ -514,8 +513,7 @@ class TabNetwork(Gtk.Box):
             return
 
         self._stop_traceroute()
-        self.scroll_trace.show_all()
-        self.trace_view.get_buffer().set_text("")
+        self._append_tools_output(f"[TRACEROUTE] Đang traceroute tới {host}...")
 
         thread = threading.Thread(target=self._do_traceroute, args=(host,), daemon=True)
         thread.start()
@@ -544,12 +542,8 @@ class TabNetwork(Gtk.Box):
             GLib.idle_add(self._append_trace, f"Lỗi traceroute: {e}")
 
     def _append_trace(self, text: str) -> None:
-        """Thêm dòng vào traceroute output."""
-        buf = self.trace_view.get_buffer()
-        end_iter = buf.get_end_iter()
-        buf.insert(end_iter, text + "\n")
-        mark = buf.get_insert()
-        self.trace_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        """Thêm dòng vào output log chung với prefix [TRACE]."""
+        self._append_tools_output(f"[TRACE] {text}")
 
     def _on_stop_traceroute(self, button) -> None:
         """Dừng traceroute."""
@@ -604,6 +598,18 @@ class TabNetwork(Gtk.Box):
 
     # ─── Helpers ─────────────────────────────────────────────
 
+    def _append_tools_output(self, text: str) -> None:
+        """Thêm dòng vào output log chung của tab Công cụ."""
+        buf = self.tools_output_view.get_buffer()
+        end_iter = buf.get_end_iter()
+        buf.insert(end_iter, text + "\n")
+        mark = buf.get_insert()
+        self.tools_output_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
+    def _on_clear_tools_output(self, button) -> None:
+        """Xóa nội dung output log."""
+        self.tools_output_view.get_buffer().set_text("")
+
     def _show_error_label(self, msg: str) -> None:
         """Hiển thị lỗi trong traffic label."""
         self.lbl_traffic_data.set_text(f"Lỗi: {msg}")
@@ -614,3 +620,12 @@ class TabNetwork(Gtk.Box):
         """Cleanup khi đóng app."""
         self._stop_ping()
         self._stop_traceroute()
+
+    def _update_status(self, msg: str) -> None:
+        """Cập nhật statusbar thông qua AppWindow."""
+        try:
+            toplevel = self.get_toplevel()
+            if hasattr(toplevel, 'update_status'):
+                toplevel.update_status(msg)
+        except Exception:
+            pass

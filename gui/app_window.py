@@ -20,6 +20,11 @@ class AppWindow(Gtk.Window):
     """
 
     def __init__(self) -> None:
+        # Ensure GTK prefers light theme BEFORE window initialization
+        settings = Gtk.Settings.get_default()
+        if settings:
+            settings.set_property("gtk-application-prefer-dark-theme", False)
+
         super().__init__(title="Linux System Manager")
         self.set_default_size(1050, 750)
         self.set_size_request(900, 650)
@@ -71,6 +76,10 @@ class AppWindow(Gtk.Window):
 
         # Xử lý đóng cửa sổ — cleanup tất cả subprocess
         self.connect("destroy", self._on_destroy)
+
+    def update_status(self, msg: str) -> None:
+        """Cập nhật nội dung thanh trạng thái từ các tab con."""
+        self.statusbar_label.set_text(f"Trạng thái: {msg}")
 
     def _on_toggle_mode(self, button: Gtk.Button) -> None:
         """Toggle Dark/Light mode bằng cách thêm/bỏ CSS class 'dark-mode' trên window."""

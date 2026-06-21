@@ -20,11 +20,18 @@ grid,
 paned,
 notebook,
 notebook > stack,
+notebook > stack > *,
+notebook notebook > stack,
+notebook notebook > stack > *,
 scrolledwindow,
+scrolledwindow > viewport,
+scrolledwindow > viewport > box,
 viewport,
 window decoration {
+    background-image: none;
     background-color: #FFFFFF;
     color: #000000;
+    border: none;
 }
 
 /* ─────────────────────────────────────────
@@ -37,11 +44,17 @@ window.dark-mode grid,
 window.dark-mode paned,
 window.dark-mode notebook,
 window.dark-mode notebook > stack,
+window.dark-mode notebook > stack > *,
+window.dark-mode notebook notebook > stack,
+window.dark-mode notebook notebook > stack > *,
 window.dark-mode scrolledwindow,
+window.dark-mode scrolledwindow > viewport,
+window.dark-mode scrolledwindow > viewport > box,
 window.dark-mode viewport,
 window.dark-mode decoration {
     background-color: #000000;
     color: #FFFFFF;
+    border: none;
 }
 
 /* ─────────────────────────────────────────
@@ -352,14 +365,33 @@ window.dark-mode separator {
 /* ─────────────────────────────────────────
    ComboBox
 ───────────────────────────────────────── */
+combobox > box > button.combo,
+combobox > box > button,
 combobox button {
+    background-image: none;
     background-color: #FFFFFF;
     color: #000000;
     border: 2px solid #000000;
+    box-shadow: 3px 3px 0px #000000;
+    margin: 0px 3px 3px 0px;
 }
+window.dark-mode combobox > box > button.combo,
+window.dark-mode combobox > box > button,
 window.dark-mode combobox button {
+    background-image: none;
     background-color: #000000;
     color: #FFFFFF;
+    border: 2px solid #FFFFFF;
+    box-shadow: 3px 3px 0px #FFFFFF;
+}
+
+combobox window.popup, combobox menu {
+    background-image: none;
+    background-color: #FFFFFF;
+    border: 2px solid #000000;
+}
+window.dark-mode combobox window.popup, window.dark-mode combobox menu {
+    background-color: #000000;
     border: 2px solid #FFFFFF;
 }
 

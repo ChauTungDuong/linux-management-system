@@ -155,12 +155,16 @@ class TabFile(Gtk.Box):
         btn_mmap.connect("clicked", self._on_mmap_demo)
         btn_box.pack_start(btn_mmap, False, False, 0)
 
-        # mmap result inline label
-        self.lbl_mmap_result = Gtk.Label(label="")
-        self.lbl_mmap_result.set_halign(Gtk.Align.START)
-        self.lbl_mmap_result.get_style_context().add_class("mmap-result")
-        self.lbl_mmap_result.set_no_show_all(True)
-        vbox.pack_start(self.lbl_mmap_result, False, False, 0)
+        # mmap result panel (log nhiều bước)
+        scroll_mmap = Gtk.ScrolledWindow()
+        scroll_mmap.set_size_request(-1, 80)
+        scroll_mmap.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.mmap_view = Gtk.TextView()
+        self.mmap_view.set_editable(False)
+        self.mmap_view.set_monospace(True)
+        self.mmap_view.get_style_context().add_class("mmap-result")
+        scroll_mmap.add(self.mmap_view)
+        vbox.pack_start(scroll_mmap, False, True, 0)
 
         self.sub_notebook.append_page(vbox, Gtk.Label(label="Đọc/Ghi"))
 
@@ -323,17 +327,33 @@ class TabFile(Gtk.Box):
         chown_frame.add(chown_box)
         vbox.pack_start(chown_frame, False, False, 0)
 
-        chown_box.pack_start(Gtk.Label(label="UID:"), False, False, 0)
-        self.entry_uid = Gtk.Entry()
-        self.entry_uid.set_width_chars(8)
-        self.entry_uid.set_placeholder_text("1000")
-        chown_box.pack_start(self.entry_uid, False, False, 0)
+        chown_box.pack_start(Gtk.Label(label="User/UID:"), False, False, 0)
+        self.combo_uid = Gtk.ComboBoxText()
+        chown_box.pack_start(self.combo_uid, False, False, 0)
 
-        chown_box.pack_start(Gtk.Label(label="GID:"), False, False, 4)
-        self.entry_gid = Gtk.Entry()
-        self.entry_gid.set_width_chars(8)
-        self.entry_gid.set_placeholder_text("1000")
-        chown_box.pack_start(self.entry_gid, False, False, 0)
+        chown_box.pack_start(Gtk.Label(label="Group/GID:"), False, False, 4)
+        self.combo_gid = Gtk.ComboBoxText()
+        chown_box.pack_start(self.combo_gid, False, False, 0)
+
+        # Populate users and groups
+        try:
+            import pwd
+            import grp
+            for u in sorted(pwd.getpwall(), key=lambda x: x.pw_uid):
+                if u.pw_uid >= 1000 or u.pw_name == 'root':
+                    self.combo_uid.append(str(u.pw_uid), f"{u.pw_name} ({u.pw_uid})")
+            for g in sorted(grp.getgrall(), key=lambda x: x.gr_gid):
+                if g.gr_gid >= 1000 or g.gr_name == 'root':
+                    self.combo_gid.append(str(g.gr_gid), f"{g.gr_name} ({g.gr_gid})")
+        except ImportError:
+            # Fallback cho OS không có pwd/grp (như Windows khi test)
+            self.combo_uid.append("1000", "user (1000)")
+            self.combo_uid.append("0", "root (0)")
+            self.combo_gid.append("1000", "group (1000)")
+            self.combo_gid.append("0", "root (0)")
+
+        self.combo_uid.set_active(0)
+        self.combo_gid.set_active(0)
 
         btn_chown = Gtk.Button(label="Áp dụng chown")
         btn_chown.get_style_context().add_class("btn-primary")
@@ -434,8 +454,8 @@ class TabFile(Gtk.Box):
 
             self.entry_perm_file.set_text(path)
             self.entry_chmod.set_text(perms_octal)
-            self.entry_uid.set_text(uid)
-            self.entry_gid.set_text(gid)
+            self.combo_uid.set_active_id(uid)
+            self.combo_gid.set_active_id(gid)
 
             # Cập nhật checkboxes
             mode = int(perms_octal, 8)
@@ -541,6 +561,7 @@ class TabFile(Gtk.Box):
                 nbytes = output.split("|")[1]
                 mode_label = "ghi thêm" if mode == "append" else "ghi đè"
                 GLib.idle_add(self._show_info, f"Đã {mode_label} {nbytes} bytes vào {path}")
+                GLib.idle_add(self._update_status, f"Đã {mode_label} {nbytes} bytes vào {os.path.basename(path)}")
                 # Reload file
                 self._do_read_file(path)
             elif output.startswith("ERROR|"):
@@ -594,6 +615,7 @@ class TabFile(Gtk.Box):
 
         # Xóa log cũ
         self.inotify_view.get_buffer().set_text("")
+        self._event_count = 0
 
         try:
             self._inotify_proc = subprocess.Popen(
@@ -610,7 +632,8 @@ class TabFile(Gtk.Box):
             self._inotify_thread.start()
 
             self._append_inotify_log(f"✅ Đang theo dõi: {path}")
-            self.lbl_watch_status.set_text(f"Đang theo dõi: {os.path.basename(path)}")
+            self._append_inotify_log(f"💡 Thử tạo, xóa hoặc chỉnh sửa file trong thư mục này để xem sự kiện.")
+            self.lbl_watch_status.set_text(f"Đang theo dõi: {os.path.basename(path)} (0 sự kiện)")
 
         except FileNotFoundError:
             self._show_error("Không tìm thấy backend/file_mgr. Hãy chạy 'make'.")
@@ -625,7 +648,12 @@ class TabFile(Gtk.Box):
                 for line in proc.stdout:
                     line = line.strip()
                     if line:
+                        if not hasattr(self, '_event_count'):
+                            self._event_count = 0
+                        self._event_count += 1
                         GLib.idle_add(self._append_inotify_log, line)
+                        GLib.idle_add(self.lbl_watch_status.set_text,
+                                      f"Đang theo dõi ({self._event_count} sự kiện)")
         except Exception:
             pass
 
@@ -709,10 +737,10 @@ class TabFile(Gtk.Box):
     def _on_chown(self, button: Gtk.Button) -> None:
         """Thay đổi sở hữu file."""
         path = self.entry_perm_file.get_text().strip()
-        uid = self.entry_uid.get_text().strip()
-        gid = self.entry_gid.get_text().strip()
+        uid = self.combo_uid.get_active_id()
+        gid = self.combo_gid.get_active_id()
         if not path or not uid or not gid:
-            self._show_error("Vui lòng chọn file, nhập UID và GID.")
+            self._show_error("Vui lòng chọn file, User và Group.")
             return
         thread = threading.Thread(
             target=self._do_chown, args=(path, uid, gid), daemon=True)
@@ -739,19 +767,31 @@ class TabFile(Gtk.Box):
     # ─── mmap demo ───────────────────────────────────────────
 
     def _on_mmap_demo(self, button: Gtk.Button) -> None:
-        """So sánh hiệu năng mmap vs read — hiển thị inline."""
+        """So sánh hiệu năng mmap vs read — hiển thị log nhiều bước."""
         path = self.entry_file.get_text().strip()
         if not path:
             self._show_error("Vui lòng chọn file trước khi chạy mmap demo.")
             return
-        self.lbl_mmap_result.set_text("⏳ Đang chạy...")
-        self.lbl_mmap_result.show()
+        self.mmap_view.get_buffer().set_text("⏳ Đang chạy benchmark...\n")
         thread = threading.Thread(target=self._do_mmap_demo, args=(path,), daemon=True)
         thread.start()
 
+    def _append_mmap_log(self, text: str) -> None:
+        """Thêm dòng vào mmap log view."""
+        buf = self.mmap_view.get_buffer()
+        end_iter = buf.get_end_iter()
+        buf.insert(end_iter, text + "\n")
+        mark = buf.get_insert()
+        self.mmap_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
     def _do_mmap_demo(self, path: str) -> None:
-        """Thread phụ: gọi file_mgr mmap."""
+        """Thread phụ: gọi file_mgr mmap và hiển thị kết quả từng bước."""
         try:
+            GLib.idle_add(self.mmap_view.get_buffer().set_text, "")
+            GLib.idle_add(self._append_mmap_log,
+                          "━━━ So sánh hiệu năng: mmap() vs read() ━━━")
+            GLib.idle_add(self._append_mmap_log, f"  File: {path}")
+
             result = subprocess.run(
                 [self._backend, 'mmap', path],
                 capture_output=True, text=True, timeout=10
@@ -763,15 +803,18 @@ class TabFile(Gtk.Box):
                 read_us = int(parts[2])
                 winner = "mmap nhanh hơn" if mmap_us < read_us else "read nhanh hơn"
                 diff = abs(read_us - mmap_us)
-                msg = (f"⚡ mmap: {mmap_us} μs  |  read: {read_us} μs  "
-                       f"|  {winner} {diff} μs")
-                GLib.idle_add(self.lbl_mmap_result.set_text, msg)
-                GLib.idle_add(self.lbl_mmap_result.show)
+                pct = (diff / max(mmap_us, read_us, 1)) * 100
+                GLib.idle_add(self._append_mmap_log,
+                              f"  [1/2] mmap() — ánh xạ file vào bộ nhớ: {mmap_us} μs")
+                GLib.idle_add(self._append_mmap_log,
+                              f"  [2/2] read() — đọc file qua system call:  {read_us} μs")
+                GLib.idle_add(self._append_mmap_log,
+                              f"  ⚡ Kết quả: {winner} {diff} μs ({pct:.0f}%)")
             elif output.startswith("ERROR|"):
-                GLib.idle_add(self.lbl_mmap_result.set_text,
-                              f"❌ {output.split('|', 1)[1]}")
+                GLib.idle_add(self._append_mmap_log,
+                              f"  ❌ {output.split('|', 1)[1]}")
         except Exception as e:
-            GLib.idle_add(self.lbl_mmap_result.set_text, f"❌ Lỗi mmap: {e}")
+            GLib.idle_add(self._append_mmap_log, f"  ❌ Lỗi mmap: {e}")
 
     # ─── Dialogs ─────────────────────────────────────────────
 
@@ -804,3 +847,12 @@ class TabFile(Gtk.Box):
     def cleanup(self) -> None:
         """Cleanup khi đóng app."""
         self._stop_inotify()
+
+    def _update_status(self, msg: str) -> None:
+        """Cập nhật statusbar thông qua AppWindow."""
+        try:
+            toplevel = self.get_toplevel()
+            if hasattr(toplevel, 'update_status'):
+                toplevel.update_status(msg)
+        except Exception:
+            pass

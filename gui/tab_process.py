@@ -470,34 +470,40 @@ class TabProcess(Gtk.Box):
         thread.start()
 
     def _do_create_process(self, parts: list) -> None:
-        """Thread phụ: gọi process_mgr create, sau đó stream output."""
+        """Thread phụ: tạo tiến trình bằng subprocess.Popen và stream output."""
         from utils.helpers import format_time
+        ts = format_time()
         try:
-            result = subprocess.run(
-                [self._backend, 'create'] + parts,
-                capture_output=True, text=True, timeout=5
+            proc = subprocess.Popen(
+                parts,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
-            output = result.stdout.strip()
-            ts = format_time()
-            if output.startswith("CREATED|"):
-                pid = output.split("|")[1]
-                self._created_procs[int(pid)] = True
-                GLib.idle_add(self._append_output,
-                              f"[{ts}] Đã tạo tiến trình: PID {pid} — lệnh: {' '.join(parts)}")
-                # Thử stream output từ tiến trình nếu có thể
-                self._try_stream_output(int(pid), parts)
-            elif output.startswith("ERROR|"):
-                GLib.idle_add(self._append_output, f"[{ts}] Lỗi: {output.split('|', 1)[1]}")
-            else:
-                GLib.idle_add(self._append_output, f"[{ts}] Output: {output}")
-        except Exception as e:
-            GLib.idle_add(self._append_output, f"Lỗi tạo tiến trình: {e}")
+            pid = proc.pid
+            self._created_procs[pid] = proc
+            GLib.idle_add(self._append_output,
+                          f"[{ts}] ✅ Đã tạo tiến trình: PID {pid} — lệnh: {' '.join(parts)}")
+            GLib.idle_add(self._update_status, f"Đã tạo tiến trình PID {pid}")
 
-    def _try_stream_output(self, pid: int, parts: list) -> None:
-        """Cố gắng đọc output từ /proc/[pid]/fd nếu có thể."""
-        # Log PID rõ ràng
-        GLib.idle_add(self._append_output,
-                      f"    → PID: {pid}  |  Lệnh: {' '.join(parts)}")
+            # Stream output real-time
+            if proc.stdout:
+                for line in proc.stdout:
+                    GLib.idle_add(self._append_output,
+                                  f"  [{pid}] {line.rstrip()}")
+
+            proc.wait()
+            exit_code = proc.returncode
+            ts2 = format_time()
+            GLib.idle_add(self._append_output,
+                          f"[{ts2}] [{pid}] Kết thúc (exit code: {exit_code})")
+
+        except FileNotFoundError:
+            GLib.idle_add(self._append_output,
+                          f"[{ts}] ❌ Lệnh không tồn tại: {parts[0]}")
+        except Exception as e:
+            GLib.idle_add(self._append_output, f"[{ts}] ❌ Lỗi tạo tiến trình: {e}")
 
     # ─── Gửi signal ──────────────────────────────────────────
 
@@ -536,15 +542,29 @@ class TabProcess(Gtk.Box):
         thread.start()
 
     def _on_kill_process(self, button: Gtk.Button) -> None:
-        """Kill ngay (SIGKILL) tiến trình đang chọn."""
+        """Kill ngay (SIGKILL) tiến trình đang chọn (có xác nhận)."""
         pid = self._get_selected_pid()
         if pid < 0:
             self._append_output("⚠ Vui lòng chọn một tiến trình trong bảng.")
             return
 
-        thread = threading.Thread(
-            target=self._do_send_signal, args=(pid, 9), daemon=True)
-        thread.start()
+        # Lấy tên tiến trình từ bảng
+        process_name = self._get_process_name_by_pid(pid)
+
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Xác nhận Kill tiến trình?\n\nPID: {pid}\nTên: {process_name}\n\nHành động này không thể hoàn tác."
+        )
+        response = dialog.run()
+        dialog.destroy()
+
+        if response == Gtk.ResponseType.OK:
+            thread = threading.Thread(
+                target=self._do_send_signal, args=(pid, 9), daemon=True)
+            thread.start()
 
     def _do_send_signal(self, pid: int, sig: int) -> None:
         """Thread phụ: gọi process_mgr signal."""
@@ -575,6 +595,22 @@ class TabProcess(Gtk.Box):
         # Auto-scroll xuống cuối
         mark = buf.get_insert()
         self.output_view.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
+    def _get_process_name_by_pid(self, pid: int) -> str:
+        """Lấy tên tiến trình từ cache entries."""
+        for entry in self._all_entries:
+            if entry[0] == pid:
+                return entry[1]
+        return "Không rõ"
+
+    def _update_status(self, msg: str) -> None:
+        """Cập nhật statusbar thông qua AppWindow."""
+        try:
+            toplevel = self.get_toplevel()
+            if hasattr(toplevel, 'update_status'):
+                toplevel.update_status(msg)
+        except Exception:
+            pass
 
     # ─── Cleanup ─────────────────────────────────────────────
 

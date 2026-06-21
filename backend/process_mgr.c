@@ -143,9 +143,11 @@ static void create_process(int argc, char *argv[]) {
     pid_t pid = fork();
     if (pid < 0) { printf("ERROR|fork() thất bại: %s\n", strerror(errno)); fflush(stdout); return; }
     if (pid == 0) {
-        freopen("/dev/null", "r", stdin);
-        freopen("/dev/null", "w", stdout);
-        freopen("/dev/null", "w", stderr);
+        FILE *dummy;
+        dummy = freopen("/dev/null", "r", stdin);
+        dummy = freopen("/dev/null", "w", stdout);
+        dummy = freopen("/dev/null", "w", stderr);
+        (void)dummy;
         execvp(argv[0], argv); 
         _exit(127); 
     }
