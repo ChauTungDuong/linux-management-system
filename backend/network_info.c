@@ -285,6 +285,83 @@ static void get_arp_table(void) {
     fclose(fp);
     fflush(stdout);
 }
+/**
+ * parse_net_file — Đọc các file /proc/net/[tcp|tcp6|udp|udp6]
+ */
+static void parse_net_file(const char *path, const char *proto_name, int is_ipv6) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) return;
+
+    char line[BUF_SIZE];
+    if (fgets(line, sizeof(line), fp) == NULL) { fclose(fp); return; }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        char local_addr[128], rem_addr[128];
+        unsigned int state, uid;
+        int scanned = sscanf(line, "%*d: %127s %127s %X %*x:%*x %*x:%*x %*x %u",
+                             local_addr, rem_addr, &state, &uid);
+        if (scanned >= 4) {
+            char *l_colon = strchr(local_addr, ':');
+            char *r_colon = strchr(rem_addr, ':');
+            if (!l_colon || !r_colon) continue;
+
+            *l_colon = '\0'; *r_colon = '\0';
+            unsigned int l_port, r_port;
+            sscanf(l_colon + 1, "%X", &l_port);
+            sscanf(r_colon + 1, "%X", &r_port);
+
+            char lis[INET6_ADDRSTRLEN] = "", ris[INET6_ADDRSTRLEN] = "";
+            if (!is_ipv6) {
+                unsigned int l_ip, r_ip;
+                sscanf(local_addr, "%X", &l_ip);
+                sscanf(rem_addr, "%X", &r_ip);
+                struct in_addr li, ri;
+                li.s_addr = l_ip;
+                ri.s_addr = r_ip;
+                inet_ntop(AF_INET, &li, lis, sizeof(lis));
+                inet_ntop(AF_INET, &ri, ris, sizeof(ris));
+            } else {
+                struct in6_addr li, ri;
+                sscanf(local_addr, "%08X%08X%08X%08X",
+                       &li.s6_addr32[0], &li.s6_addr32[1], &li.s6_addr32[2], &li.s6_addr32[3]);
+                sscanf(rem_addr, "%08X%08X%08X%08X",
+                       &ri.s6_addr32[0], &ri.s6_addr32[1], &ri.s6_addr32[2], &ri.s6_addr32[3]);
+                inet_ntop(AF_INET6, &li, lis, sizeof(lis));
+                inet_ntop(AF_INET6, &ri, ris, sizeof(ris));
+            }
+
+            const char *state_str = "UNKNOWN";
+            switch(state) {
+                case 1: state_str = "ESTABLISHED"; break;
+                case 2: state_str = "SYN_SENT"; break;
+                case 3: state_str = "SYN_RECV"; break;
+                case 4: state_str = "FIN_WAIT1"; break;
+                case 5: state_str = "FIN_WAIT2"; break;
+                case 6: state_str = "TIME_WAIT"; break;
+                case 7: state_str = (proto_name[0] == 'U') ? "ACTIVE" : "CLOSE"; break;
+                case 8: state_str = "CLOSE_WAIT"; break;
+                case 9: state_str = "LAST_ACK"; break;
+                case 10: state_str = "LISTEN"; break;
+                case 11: state_str = "CLOSING"; break;
+            }
+
+            printf("%s|%s|%d|%s|%d|%s|%u\n", proto_name, lis, l_port, ris, r_port, state_str, uid);
+        }
+    }
+    fclose(fp);
+}
+
+/**
+ * get_active_connections — Đọc /proc/net/tcp và /proc/net/udp
+ * Output: PROTO|LOCAL_IP|LOCAL_PORT|REMOTE_IP|REMOTE_PORT|STATE|UID
+ */
+static void get_active_connections(void) {
+    parse_net_file("/proc/net/tcp", "TCP", 0);
+    parse_net_file("/proc/net/tcp6", "TCP6", 1);
+    parse_net_file("/proc/net/udp", "UDP", 0);
+    parse_net_file("/proc/net/udp6", "UDP6", 1);
+    fflush(stdout);
+}
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -295,6 +372,7 @@ int main(int argc, char *argv[]) {
     if (strcmp(argv[1], "interfaces") == 0)      list_interfaces();
     else if (strcmp(argv[1], "traffic") == 0)     get_traffic_stats();
     else if (strcmp(argv[1], "route") == 0)       get_routing_table();
+    else if (strcmp(argv[1], "connections") == 0) get_active_connections();
     else if (strcmp(argv[1], "dns") == 0) {
         if (argc < 3) { printf("ERROR|Thiếu hostname\n"); fflush(stdout); return 1; }
         do_dns_lookup(argv[2]);

@@ -95,6 +95,12 @@ class TabProcess(Gtk.Box):
         self.btn_toggle_tree = Gtk.Button(label="Cây tiến trình")
         self.btn_toggle_tree.connect("clicked", self._on_toggle_tree)
         toolbar.pack_end(self.btn_toggle_tree, False, False, 0)
+        
+        # Nút Mở rộng / Thu gọn cây (ẩn mặc định, chỉ hiện ở chế độ Cây)
+        self.btn_expand_tree = Gtk.Button(label="Mở rộng tất cả")
+        self.btn_expand_tree.connect("clicked", self._on_expand_tree)
+        self.btn_expand_tree.set_no_show_all(True)
+        toolbar.pack_end(self.btn_expand_tree, False, False, 4)
 
         # Nút refresh thủ công
         btn_refresh = Gtk.Button(label="Làm mới")
@@ -120,6 +126,7 @@ class TabProcess(Gtk.Box):
         self.tree_treeview = Gtk.TreeView(model=self.tree_store)
         self.tree_treeview.set_headers_visible(True)
         self.tree_treeview.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        self.tree_treeview.connect("row-activated", self._on_row_activated)
 
         for title, col_id, width in [("PID", 0, 100), ("Tên tiến trình", 1, 250), ("Trạng thái", 2, 120)]:
             renderer = Gtk.CellRendererText()
@@ -162,6 +169,16 @@ class TabProcess(Gtk.Box):
         btn_create.get_style_context().add_class("btn-success")
         btn_create.connect("clicked", self._on_create_process)
         row1.pack_start(btn_create, False, False, 0)
+
+        btn_zombie = Gtk.Button(label="Tạo Zombie")
+        btn_zombie.get_style_context().add_class("btn-warning")
+        btn_zombie.connect("clicked", self._on_create_zombie)
+        row1.pack_start(btn_zombie, False, False, 0)
+
+        btn_fork = Gtk.Button(label="Test Fork")
+        btn_fork.get_style_context().add_class("btn-info")
+        btn_fork.connect("clicked", self._on_create_fork)
+        row1.pack_start(btn_fork, False, False, 0)
 
         # Dòng 2: Signal
         row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -214,6 +231,7 @@ class TabProcess(Gtk.Box):
         treeview = Gtk.TreeView(model=store)
         treeview.set_headers_visible(True)
         treeview.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        treeview.connect("row-activated", self._on_row_activated)
 
         columns = [
             ("PID", 0, 80),
@@ -259,6 +277,8 @@ class TabProcess(Gtk.Box):
         self._show_tree = not self._show_tree
         if self._show_tree:
             button.set_label("Danh sách")
+            self.btn_expand_tree.show()
+            self.btn_expand_tree.set_label("Mở rộng tất cả")
             # Ẩn sub_notebook, hiện tree view
             self.sub_notebook.hide()
             self.tree_scroll.show_all()
@@ -269,9 +289,21 @@ class TabProcess(Gtk.Box):
             self._refresh_tree()
         else:
             button.set_label("Cây tiến trình")
+            self.btn_expand_tree.hide()
             self.tree_scroll.hide()
             self.sub_notebook.show_all()
             self._refresh_data()
+
+    def _on_expand_tree(self, button: Gtk.Button) -> None:
+        """Bung / Thu gọn toàn bộ cây tiến trình."""
+        if button.get_label() == "Mở rộng tất cả":
+            self.tree_treeview.expand_all()
+            button.set_label("Thu gọn tất cả")
+        else:
+            self.tree_treeview.collapse_all()
+            if self.tree_store.get_iter_first():
+                self.tree_treeview.expand_to_path(Gtk.TreePath.new_from_string("0"))
+            button.set_label("Mở rộng tất cả")
 
     def _on_sub_tab_changed(self, notebook, page, page_num) -> None:
         """Khi chuyển sub-tab, cập nhật hiển thị."""
@@ -281,6 +313,136 @@ class TabProcess(Gtk.Box):
         """Lọc tiến trình khi thay đổi text tìm kiếm."""
         self._search_text = entry.get_text().strip().lower()
         self._update_all_stores()
+        if getattr(self, "_show_tree", False):
+            self._refresh_tree()
+
+    def _on_row_activated(self, treeview: Gtk.TreeView, path: Gtk.TreePath, column: Gtk.TreeViewColumn) -> None:
+        """Kích hoạt khi double-click vào một tiến trình."""
+        model = treeview.get_model()
+        treeiter = model.get_iter(path)
+        pid = model[treeiter][0]
+        
+        cached_entry = None
+        for entry in self._all_entries:
+            if entry[0] == pid:
+                cached_entry = entry
+                break
+                
+        thread = threading.Thread(target=self._do_fetch_detail, args=(pid, cached_entry), daemon=True)
+        thread.start()
+
+    def _do_fetch_detail(self, pid: int, cached_entry: tuple) -> None:
+        """Thread phụ: lấy chi tiết tiến trình."""
+        try:
+            result = subprocess.run(
+                [self._backend, 'detail', str(pid)],
+                capture_output=True, text=True, timeout=3
+            )
+            output = result.stdout.strip()
+            if output.startswith("DETAIL|"):
+                parts = output.split("|")
+                name = parts[1]
+                state = parts[2]
+                ppid = parts[3]
+                threads = parts[4]
+                cmdline = parts[5] if len(parts) > 5 else ""
+                GLib.idle_add(self._show_detail_dialog, pid, name, state, ppid, threads, cmdline, cached_entry)
+            elif output.startswith("ERROR|"):
+                GLib.idle_add(self._append_output, f"Lỗi chi tiết: {output.split('|', 1)[1]}")
+        except Exception as e:
+            GLib.idle_add(self._append_output, f"Lỗi fetch detail: {e}")
+
+    def _show_detail_dialog(self, pid: int, name: str, state: str, ppid: str, threads: str, cmdline: str, cached_entry: tuple) -> None:
+        """Hiển thị cửa sổ chi tiết tiến trình (Gtk.Window)."""
+        import pwd
+        cpu = mem = "N/A"
+        uid_str = "N/A"
+        user_name = "Unknown"
+        if cached_entry:
+            # entry: (pid, name, cpu, mem, state, uid)
+            cpu = cached_entry[2]
+            mem = cached_entry[3]
+            uid = cached_entry[5]
+            uid_str = str(uid)
+            try:
+                if uid >= 0:
+                    user_name = pwd.getpwuid(uid).pw_name
+            except Exception:
+                pass
+                
+        window = Gtk.Window(title=f"Chi tiết tiến trình: {name}")
+        window.set_transient_for(self.get_toplevel())
+        window.set_modal(False)
+        window.set_default_size(550, 380)
+        window.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        window.set_border_width(12)
+        
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        window.add(vbox)
+        
+        # Header
+        header = Gtk.Label()
+        header.set_markup(f"<big><b>PID: {pid} — {name}</b></big>")
+        header.set_halign(Gtk.Align.START)
+        vbox.pack_start(header, False, False, 0)
+        
+        vbox.pack_start(Gtk.Separator(), False, False, 0)
+        
+        # Grid cho thông tin
+        grid = Gtk.Grid()
+        grid.set_column_spacing(24)
+        grid.set_row_spacing(8)
+        vbox.pack_start(grid, False, False, 0)
+        
+        info = [
+            ("Trạng thái:", state, 0, 0),
+            ("PPID:", ppid, 1, 0),
+            ("Người dùng:", f"{user_name} (UID: {uid_str})", 0, 1),
+            ("Số luồng:", threads, 1, 1),
+            ("Sử dụng CPU:", cpu, 0, 2),
+            ("Sử dụng RAM:", mem, 1, 2)
+        ]
+        
+        for label_text, value_text, col, row in info:
+            lbl_title = Gtk.Label(label=label_text)
+            lbl_title.set_halign(Gtk.Align.START)
+            lbl_title.get_style_context().add_class("dim-label")
+            
+            lbl_val = Gtk.Label(label=value_text)
+            lbl_val.set_halign(Gtk.Align.START)
+            lbl_val.set_selectable(True)
+            
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            box.pack_start(lbl_title, False, False, 0)
+            box.pack_start(lbl_val, False, False, 0)
+            grid.attach(box, col, row, 1, 1)
+            
+        vbox.pack_start(Gtk.Separator(), False, False, 0)
+        
+        lbl_cmd = Gtk.Label(label="Command Line:")
+        lbl_cmd.set_halign(Gtk.Align.START)
+        lbl_cmd.get_style_context().add_class("dim-label")
+        vbox.pack_start(lbl_cmd, False, False, 0)
+        
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        vbox.pack_start(scroll, True, True, 0)
+        
+        tv = Gtk.TextView()
+        tv.set_editable(False)
+        tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        tv.get_buffer().set_text(cmdline)
+        scroll.add(tv)
+        
+        bbox = Gtk.ButtonBox(orientation=Gtk.Orientation.HORIZONTAL)
+        bbox.set_layout(Gtk.ButtonBoxStyle.END)
+        vbox.pack_end(bbox, False, False, 0)
+        
+        btn_close = Gtk.Button(label="Đóng")
+        btn_close.connect("clicked", lambda w: window.destroy())
+        bbox.add(btn_close)
+        
+        window.show_all()
 
     # ─── Data refresh (chạy trong thread phụ) ────────────────
 
@@ -426,16 +588,62 @@ class TabProcess(Gtk.Box):
                 children_map[ppid] = []
             children_map[ppid].append(pid)
 
-        # Tìm root processes (PPID = 0 hoặc PPID không tồn tại)
+        search = self._search_text
+        
+        # Hàm đệ quy kiểm tra xem node này hoặc con cháu của nó có khớp search không
+        match_memo = {}
+        def matches_search(pid: int) -> bool:
+            if pid in match_memo:
+                return match_memo[pid]
+            if pid not in processes:
+                match_memo[pid] = False
+                return False
+                
+            ppid, name = processes[pid]
+            is_match = False
+            
+            if not search:
+                is_match = True
+            elif search.isdigit():
+                if search in str(pid):
+                    is_match = True
+            else:
+                if search in name.lower():
+                    is_match = True
+            
+            # Nếu node này không khớp, kiểm tra con cháu
+            if not is_match and pid in children_map:
+                for child_pid in children_map[pid]:
+                    if matches_search(child_pid):
+                        is_match = True
+                        break
+                        
+            match_memo[pid] = is_match
+            return is_match
+
         iters_map = {}  # PID → TreeIter
 
         def add_node(pid: int, parent_iter):
             """Đệ quy thêm node vào TreeStore."""
             if pid not in processes:
                 return
+                
+            # Nếu đang có search text và nhánh này không có kết quả nào khớp -> bỏ qua
+            if search and not matches_search(pid):
+                return
+                
             ppid, name = processes[pid]
-            it = self.tree_store.append(parent_iter, [pid, name, ""])
+            
+            # Lấy state từ cache entries nếu có
+            state = ""
+            for e in self._all_entries:
+                if e[0] == pid:
+                    state = e[4]
+                    break
+                    
+            it = self.tree_store.append(parent_iter, [pid, name, state])
             iters_map[pid] = it
+            
             # Thêm children
             if pid in children_map:
                 for child_pid in sorted(children_map[pid]):
@@ -450,8 +658,10 @@ class TabProcess(Gtk.Box):
         for pid in sorted(roots):
             add_node(pid, None)
 
-        # Expand level 1
-        if self.tree_store.get_iter_first():
+        # Expand behavior
+        if search:
+            self.tree_treeview.expand_all()
+        elif self.tree_store.get_iter_first():
             self.tree_treeview.expand_to_path(Gtk.TreePath.new_from_string("0"))
 
     # ─── Tạo tiến trình ──────────────────────────────────────
@@ -504,6 +714,58 @@ class TabProcess(Gtk.Box):
                           f"[{ts}] ❌ Lệnh không tồn tại: {parts[0]}")
         except Exception as e:
             GLib.idle_add(self._append_output, f"[{ts}] ❌ Lỗi tạo tiến trình: {e}")
+
+    def _on_create_zombie(self, button) -> None:
+        """Tạo tiến trình zombie thông qua backend."""
+        self.entry_cmd.set_text("")
+        thread = threading.Thread(
+            target=self._do_create_process_backend, args=(["zombie"], "Tạo Zombie"), daemon=True)
+        thread.start()
+
+    def _on_create_fork(self, button) -> None:
+        """Tạo tiến trình con (fork test) thông qua backend."""
+        self.entry_cmd.set_text("")
+        thread = threading.Thread(
+            target=self._do_create_process_backend, args=(["fork_test"], "Test Fork"), daemon=True)
+        thread.start()
+
+    def _do_create_process_backend(self, parts: list, action_name: str) -> None:
+        """Thread phụ: chạy lệnh backend đặc biệt (zombie, fork_test)."""
+        from utils.helpers import format_time
+        ts = format_time()
+        try:
+            cmd = [self._backend] + parts
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            GLib.idle_add(self._append_output,
+                          f"[{ts}] ⏳ Đang thực thi {action_name}...")
+            
+            if proc.stdout:
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line.startswith("CREATED|"):
+                        child_pid = int(line.split("|")[1])
+                        self._created_procs[child_pid] = proc
+                        GLib.idle_add(self._append_output,
+                                      f"[{ts}] ✅ Đã tạo: PID {child_pid} — {action_name}")
+                        GLib.idle_add(self._update_status, f"Đã tạo {action_name} PID {child_pid}")
+                    else:
+                        GLib.idle_add(self._append_output,
+                                      f"  [Backend] {line}")
+
+            proc.wait()
+            exit_code = proc.returncode
+            ts2 = format_time()
+            GLib.idle_add(self._append_output,
+                          f"[{ts2}] {action_name} kết thúc (exit code: {exit_code})")
+
+        except Exception as e:
+            GLib.idle_add(self._append_output, f"[{ts}] ❌ Lỗi {action_name}: {e}")
 
     # ─── Gửi signal ──────────────────────────────────────────
 

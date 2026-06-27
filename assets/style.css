@@ -31,7 +31,10 @@ window decoration {
     background-image: none;
     background-color: #FFFFFF;
     color: #000000;
-    border: none;
+}
+
+window, dialog, messagedialog, window decoration {
+    border: 1px solid #000000;
 }
 
 /* ─────────────────────────────────────────
@@ -54,7 +57,10 @@ window.dark-mode viewport,
 window.dark-mode decoration {
     background-color: #000000;
     color: #FFFFFF;
-    border: none;
+}
+
+window.dark-mode, window.dark-mode dialog, window.dark-mode messagedialog, window.dark-mode decoration {
+    border: 1px solid #FFFFFF;
 }
 
 /* ─────────────────────────────────────────
@@ -136,6 +142,20 @@ notebook notebook > header > tabs > tab:checked {
 }
 window.dark-mode notebook notebook > header > tabs > tab:checked {
     background-color: #FFFFFF;
+    color: #000000;
+}
+
+/* Fix GtkBox inside tabs overriding background */
+notebook > header > tabs > tab box,
+notebook notebook > header > tabs > tab box {
+    background-color: transparent;
+}
+notebook > header > tabs > tab:checked label,
+notebook notebook > header > tabs > tab:checked label {
+    color: #FFFFFF;
+}
+window.dark-mode notebook > header > tabs > tab:checked label,
+window.dark-mode notebook notebook > header > tabs > tab:checked label {
     color: #000000;
 }
 

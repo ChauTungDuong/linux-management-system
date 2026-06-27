@@ -156,6 +156,35 @@ static void create_process(int argc, char *argv[]) {
 }
 
 /**
+ * create_zombie — tạo tiến trình zombie
+ */
+static void create_zombie(void) {
+    pid_t pid = fork();
+    if (pid < 0) { printf("ERROR|fork() thất bại: %s\n", strerror(errno)); fflush(stdout); return; }
+    if (pid == 0) {
+        _exit(0); /* Con kết thúc ngay */
+    }
+    printf("CREATED|%d\n", pid);
+    fflush(stdout);
+    sleep(45); /* Cha chờ để con thành zombie */
+}
+
+/**
+ * create_fork_test — tạo tiến trình fork bình thường
+ */
+static void create_fork_test(void) {
+    pid_t pid = fork();
+    if (pid < 0) { printf("ERROR|fork() thất bại: %s\n", strerror(errno)); fflush(stdout); return; }
+    if (pid == 0) {
+        sleep(45); /* Con chạy 45s */
+        _exit(0);
+    }
+    printf("CREATED|%d\n", pid);
+    fflush(stdout);
+    sleep(45); /* Cha cũng chạy 45s */
+}
+
+/**
  * send_signal_to_process — Gửi signal tới PID
  * Output: OK|PID|SIGNAME hoặc ERROR|message
  */
@@ -216,6 +245,54 @@ static void get_process_tree(void) {
     fflush(stdout);
 }
 
+/**
+ * get_process_detail — Chi tiết tiến trình
+ * Output: DETAIL|Name|State|PPID|Threads|Cmdline
+ */
+static void get_process_detail(int pid) {
+    char path[PATH_SIZE], buf[BUF_SIZE];
+    char name[NAME_SIZE] = "", state[NAME_SIZE] = "", cmdline[BUF_SIZE] = "";
+    int ppid = 0, threads = 0;
+    
+    snprintf(path, sizeof(path), "/proc/%d/status", pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        printf("ERROR|Tiến trình không tồn tại hoặc không có quyền truy cập\n");
+        fflush(stdout);
+        return;
+    }
+    
+    while (fgets(buf, sizeof(buf), fp)) {
+        if (strncmp(buf, "Name:", 5) == 0) {
+            sscanf(buf + 5, "%255s", name);
+        } else if (strncmp(buf, "State:", 6) == 0) {
+            char *v = buf + 6; while (*v == ' ' || *v == '\t') v++;
+            char *nl = strchr(v, '\n'); if (nl) *nl = '\0';
+            snprintf(state, sizeof(state), "%.255s", v);
+        } else if (strncmp(buf, "PPid:", 5) == 0) {
+            ppid = atoi(buf + 5);
+        } else if (strncmp(buf, "Threads:", 8) == 0) {
+            threads = atoi(buf + 8);
+        }
+    }
+    fclose(fp);
+
+    snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+    fp = fopen(path, "r");
+    if (fp) {
+        size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+        if (n > 0) {
+            for (size_t i = 0; i < n; i++) if (buf[i] == '\0') buf[i] = ' ';
+            buf[n] = '\0';
+            snprintf(cmdline, sizeof(cmdline), "%.*s", BUF_SIZE - 1, buf);
+        }
+        fclose(fp);
+    }
+
+    printf("DETAIL|%s|%s|%d|%d|%s\n", name, state, ppid, threads, cmdline[0] ? cmdline : "(kernel thread / no cmd)");
+    fflush(stdout);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Sử dụng: %s [list|create|signal|tree]\n", argv[0]); return 1;
@@ -230,6 +307,12 @@ int main(int argc, char *argv[]) {
         send_signal_to_process(atoi(argv[2]), atoi(argv[3]));
     }
     else if (strcmp(argv[1], "tree") == 0) { get_process_tree(); }
+    else if (strcmp(argv[1], "detail") == 0) {
+        if (argc < 3) { printf("ERROR|Thiếu PID\n"); return 1; }
+        get_process_detail(atoi(argv[2]));
+    }
+    else if (strcmp(argv[1], "zombie") == 0) { create_zombie(); }
+    else if (strcmp(argv[1], "fork_test") == 0) { create_fork_test(); }
     else { fprintf(stderr, "Lệnh không hợp lệ: %s\n", argv[1]); return 1; }
     return 0;
 }

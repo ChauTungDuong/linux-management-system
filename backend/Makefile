@@ -10,7 +10,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g -O2
 
 # Danh sách binary cần build
-TARGETS = process_mgr file_mgr socket_server socket_client network_info
+TARGETS = process_mgr file_mgr socket_server socket_client socket_udp_server socket_udp_client network_info
 
 # Target mặc định: build tất cả
 all: $(TARGETS)
@@ -29,6 +29,14 @@ socket_server: socket_server.c
 
 # Socket Client — TCP client (cần pthread)
 socket_client: socket_client.c
+	$(CC) $(CFLAGS) -pthread -o $@ $<
+
+# Socket UDP Server — UDP server (cần pthread)
+socket_udp_server: socket_udp_server.c
+	$(CC) $(CFLAGS) -pthread -o $@ $<
+
+# Socket UDP Client — UDP client (cần pthread)
+socket_udp_client: socket_udp_client.c
 	$(CC) $(CFLAGS) -pthread -o $@ $<
 
 # Network Info — thông tin mạng

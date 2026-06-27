@@ -26,6 +26,9 @@ class TabNetwork(Gtk.Box):
         self._backend = get_backend_path("network_info")
         self._ping_proc = None
         self._traceroute_proc = None
+        
+        self.last_traffic_stats = {}
+        self.last_traffic_time = 0.0
 
         self._build_ui()
         # Load dữ liệu ban đầu
@@ -104,10 +107,26 @@ class TabNetwork(Gtk.Box):
         lbl_traffic.get_style_context().add_class("section-label")
         content.pack_start(lbl_traffic, False, False, 8)
 
-        self.lbl_traffic_data = Gtk.Label(label="Đang tải...")
-        self.lbl_traffic_data.set_halign(Gtk.Align.START)
-        self.lbl_traffic_data.set_line_wrap(True)
-        content.pack_start(self.lbl_traffic_data, False, False, 0)
+        scroll_traffic = Gtk.ScrolledWindow()
+        scroll_traffic.set_size_request(-1, 100)
+        scroll_traffic.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        content.pack_start(scroll_traffic, False, True, 0)
+
+        self.traffic_store = Gtk.ListStore(str, str, str, str, str)
+        self.traffic_tree = Gtk.TreeView(model=self.traffic_store)
+        self.traffic_tree.set_headers_visible(True)
+
+        for title, col_id, width in [
+            ("Interface", 0, 100), ("Tốc độ Nhận (▼)", 1, 120), ("Tốc độ Gửi (▲)", 2, 120),
+            ("Tổng Nhận", 3, 100), ("Tổng Gửi", 4, 100)
+        ]:
+            renderer = Gtk.CellRendererText()
+            col = Gtk.TreeViewColumn(title, renderer, text=col_id)
+            col.set_resizable(True)
+            col.set_min_width(width)
+            self.traffic_tree.append_column(col)
+
+        scroll_traffic.add(self.traffic_tree)
 
         # === 3. Routing Table ===
         sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
@@ -139,6 +158,8 @@ class TabNetwork(Gtk.Box):
             self.route_tree.append_column(col)
 
         scroll_route.add(self.route_tree)
+
+
 
         self.sub_notebook.append_page(scroll_main, Gtk.Label(label="Tổng quan"))
 
@@ -361,25 +382,53 @@ class TabNetwork(Gtk.Box):
 
     def _do_refresh_traffic(self) -> None:
         """Gọi network_info traffic."""
+        import time
         try:
             result = subprocess.run(
                 [self._backend, 'traffic'],
                 capture_output=True, text=True, timeout=5
             )
-            lines = []
+            entries = []
+            current_time = time.time()
+            dt = current_time - self.last_traffic_time if self.last_traffic_time else 1.0
+            if dt <= 0: dt = 1.0
+            self.last_traffic_time = current_time
+            new_stats = {}
+
             for line in result.stdout.strip().split('\n'):
                 if not line or line.startswith("ERROR"):
                     continue
                 parts = line.split('|')
                 if len(parts) >= 3:
                     iface = parts[0]
-                    rx = format_bytes(int(parts[1]))
-                    tx = format_bytes(int(parts[2]))
-                    lines.append(f"  {iface} — Nhận: {rx}  |  Gửi: {tx}")
-            text = "\n".join(lines) if lines else "Không có dữ liệu"
-            GLib.idle_add(self.lbl_traffic_data.set_text, text)
+                    rx = int(parts[1])
+                    tx = int(parts[2])
+                    new_stats[iface] = (rx, tx)
+                    
+                    rx_speed = tx_speed = 0
+                    if iface in self.last_traffic_stats:
+                        old_rx, old_tx = self.last_traffic_stats[iface]
+                        rx_speed = max(0, (rx - old_rx) / dt)
+                        tx_speed = max(0, (tx - old_tx) / dt)
+
+                    rx_str = format_bytes(rx_speed) + "/s"
+                    tx_str = format_bytes(tx_speed) + "/s"
+                    total_rx = format_bytes(rx)
+                    total_tx = format_bytes(tx)
+                    entries.append((iface, rx_str, tx_str, total_rx, total_tx))
+                    
+            self.last_traffic_stats = new_stats
+            GLib.idle_add(self._update_traffic_store, entries)
         except Exception as e:
-            GLib.idle_add(self.lbl_traffic_data.set_text, f"Lỗi: {e}")
+            GLib.idle_add(self._show_error_label, f"Lỗi traffic: {e}")
+
+    def _update_traffic_store(self, entries: list) -> None:
+        """Cập nhật bảng traffic."""
+        self.traffic_store.clear()
+        for row in entries:
+            self.traffic_store.append(list(row))
+
+
 
     def _do_refresh_route(self) -> None:
         """Gọi network_info route."""
@@ -611,8 +660,8 @@ class TabNetwork(Gtk.Box):
         self.tools_output_view.get_buffer().set_text("")
 
     def _show_error_label(self, msg: str) -> None:
-        """Hiển thị lỗi trong traffic label."""
-        self.lbl_traffic_data.set_text(f"Lỗi: {msg}")
+        """Hiển thị lỗi trong status bar."""
+        self._update_status(f"Lỗi: {msg}")
 
     # ─── Cleanup ─────────────────────────────────────────────
 

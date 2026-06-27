@@ -5,7 +5,7 @@ Chứa Gtk.Notebook với 4 tab, thanh trạng thái, và nút toggle Dark/Light
 
 import gi
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk
+from gi.repository import Gtk, GLib
 
 from gui.tab_process import TabProcess
 from gui.tab_file import TabFile
@@ -50,7 +50,7 @@ class AppWindow(Gtk.Window):
         # Thêm tab với label
         self.notebook.append_page(self.tab_process, Gtk.Label(label="Process Manager"))
         self.notebook.append_page(self.tab_file, Gtk.Label(label="File I/O"))
-        self.notebook.append_page(self.tab_socket, Gtk.Label(label="Socket TCP"))
+        self.notebook.append_page(self.tab_socket, Gtk.Label(label="Socket"))
         self.notebook.append_page(self.tab_network, Gtk.Label(label="Network"))
 
         # Thanh trạng thái (statusbar)
@@ -68,6 +68,11 @@ class AppWindow(Gtk.Window):
         version_label.get_style_context().add_class("metadata-label")
         statusbar_box.pack_start(version_label, False, False, 8)
 
+        # System Stats
+        self.sys_stats_label = Gtk.Label(label="CPU: --% | RAM: --%")
+        self.sys_stats_label.get_style_context().add_class("metadata-label")
+        statusbar_box.pack_start(self.sys_stats_label, False, False, 16)
+
         # Nút toggle Dark/Light mode
         self.btn_mode = Gtk.Button(label="Dark Mode")
         self.btn_mode.get_style_context().add_class("mode-toggle")
@@ -76,6 +81,44 @@ class AppWindow(Gtk.Window):
 
         # Xử lý đóng cửa sổ — cleanup tất cả subprocess
         self.connect("destroy", self._on_destroy)
+
+        # Bắt đầu timer cập nhật CPU/RAM
+        GLib.timeout_add(2000, self._update_system_stats)
+
+    def _update_system_stats(self) -> bool:
+        """Đọc /proc/stat và /proc/meminfo để hiển thị tổng quan %CPU và %RAM."""
+        try:
+            with open('/proc/meminfo', 'r') as f:
+                lines = f.readlines()
+            mem_total = mem_avail = 0
+            for line in lines:
+                if line.startswith('MemTotal:'):
+                    mem_total = int(line.split()[1])
+                elif line.startswith('MemAvailable:'):
+                    mem_avail = int(line.split()[1])
+            mem_percent = ((mem_total - mem_avail) / mem_total * 100) if mem_total else 0
+            
+            with open('/proc/stat', 'r') as f:
+                cpu_line = f.readline()
+            parts = [int(p) for p in cpu_line.split()[1:]]
+            idle = parts[3]
+            total = sum(parts)
+            
+            if hasattr(self, '_last_cpu_total'):
+                diff_total = total - self._last_cpu_total
+                diff_idle = idle - self._last_cpu_idle
+                cpu_percent = (diff_total - diff_idle) / diff_total * 100 if diff_total else 0
+            else:
+                cpu_percent = 0
+                
+            self._last_cpu_total = total
+            self._last_cpu_idle = idle
+            
+            self.sys_stats_label.set_text(f"CPU: {cpu_percent:.1f}% | RAM: {mem_percent:.1f}%")
+        except Exception:
+            self.sys_stats_label.set_text("CPU/RAM: N/A")
+            
+        return True # Giữ timer tiếp tục chạy
 
     def update_status(self, msg: str) -> None:
         """Cập nhật nội dung thanh trạng thái từ các tab con."""
