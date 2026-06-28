@@ -28,6 +28,8 @@
 #include <signal.h>
 #include <pwd.h>
 #include <grp.h>
+#include <dirent.h>
+#include <limits.h>
 
 #define BUF_SIZE 4096
 #define EVENT_SIZE (sizeof(struct inotify_event))
@@ -379,6 +381,69 @@ static void do_mmap(const char *path) {
     fflush(stdout);
 }
 
+/**
+ * do_list — Đọc thư mục
+ * Output: LIST|type|name|size
+ */
+static void do_list(const char *path) {
+    DIR *d = opendir(path);
+    if (!d) {
+        printf("ERROR|opendir() thất bại: %s\n", strerror(errno));
+        fflush(stdout);
+        return;
+    }
+    struct dirent *dir;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0) continue;
+        char full_path[PATH_MAX];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, dir->d_name);
+        struct stat st;
+        if (stat(full_path, &st) == -1) continue;
+        const char *type = S_ISDIR(st.st_mode) ? "dir" : "file";
+        printf("LIST|%s|%s|%ld\n", type, dir->d_name, (long)st.st_size);
+    }
+    closedir(d);
+    fflush(stdout);
+}
+
+/**
+ * do_mkdir — Tạo thư mục
+ */
+static void do_mkdir(const char *path) {
+    if (mkdir(path, 0755) == -1) {
+        printf("ERROR|mkdir() thất bại: %s\n", strerror(errno));
+    } else {
+        printf("OK|mkdir|%s\n", path);
+    }
+    fflush(stdout);
+}
+
+/**
+ * do_create_file — Tạo file rỗng
+ */
+static void do_create_file(const char *path) {
+    int fd = open(path, O_CREAT | O_WRONLY | O_EXCL, 0644);
+    if (fd == -1) {
+        printf("ERROR|open() thất bại: %s\n", strerror(errno));
+    } else {
+        close(fd);
+        printf("OK|create_file|%s\n", path);
+    }
+    fflush(stdout);
+}
+
+/**
+ * do_rename — Đổi tên file/thư mục
+ */
+static void do_rename(const char *old_path, const char *new_path) {
+    if (rename(old_path, new_path) == -1) {
+        printf("ERROR|rename() thất bại: %s\n", strerror(errno));
+    } else {
+        printf("OK|rename|%s\n", new_path);
+    }
+    fflush(stdout);
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 3) {
         fprintf(stderr, "Sử dụng: %s [read|write|append|info|watch|mmap|chmod|chown] <path> [args]\n", argv[0]);
@@ -417,6 +482,13 @@ int main(int argc, char *argv[]) {
     else if (strcmp(cmd, "chown") == 0) {
         if (argc < 5) { printf("ERROR|Thiếu uid và gid\n"); return 1; }
         do_chown(path, atoi(argv[3]), atoi(argv[4]));
+    }
+    else if (strcmp(cmd, "list") == 0) do_list(path);
+    else if (strcmp(cmd, "mkdir") == 0) do_mkdir(path);
+    else if (strcmp(cmd, "create_file") == 0) do_create_file(path);
+    else if (strcmp(cmd, "rename") == 0) {
+        if (argc < 4) { printf("ERROR|Thiếu tên mới\n"); return 1; }
+        do_rename(path, argv[3]);
     }
     else { fprintf(stderr, "Lệnh không hợp lệ: %s\n", cmd); return 1; }
 

@@ -49,7 +49,7 @@ class AppWindow(Gtk.Window):
 
         # Thêm tab với label
         self.notebook.append_page(self.tab_process, Gtk.Label(label="Process Manager"))
-        self.notebook.append_page(self.tab_file, Gtk.Label(label="File I/O"))
+        self.notebook.append_page(self.tab_file, Gtk.Label(label="File"))
         self.notebook.append_page(self.tab_socket, Gtk.Label(label="Socket"))
         self.notebook.append_page(self.tab_network, Gtk.Label(label="Network"))
 

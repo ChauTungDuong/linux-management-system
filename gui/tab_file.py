@@ -39,12 +39,259 @@ class TabFile(Gtk.Box):
         self.sub_notebook = Gtk.Notebook()
         self.pack_start(self.sub_notebook, True, True, 0)
 
+        # Sub-tab 0: Duyệt File (mới)
+        self._build_browser_tab()
         # Sub-tab 1: Đọc/Ghi
         self._build_read_write_tab()
         # Sub-tab 2: Theo dõi (inotify)
         self._build_inotify_tab()
         # Sub-tab 3: Quyền & Sở hữu
         self._build_permissions_tab()
+
+    # ═══════════════════════════════════════════════════════════
+    # SUB-TAB 0: Duyệt File
+    # ═══════════════════════════════════════════════════════════
+
+    def _build_browser_tab(self) -> None:
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        vbox.set_border_width(8)
+
+        # Thanh địa chỉ
+        row_path = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vbox.pack_start(row_path, False, False, 0)
+
+        btn_up = Gtk.Button(label="Lên")
+        btn_up.connect("clicked", self._on_browser_up)
+        row_path.pack_start(btn_up, False, False, 0)
+
+        self.entry_browser_path = Gtk.Entry()
+        self.entry_browser_path.set_text(os.path.expanduser("~"))
+        self.entry_browser_path.set_hexpand(True)
+        self.entry_browser_path.connect("activate", self._on_browser_go)
+        row_path.pack_start(self.entry_browser_path, True, True, 0)
+
+        btn_go = Gtk.Button(label="Đi")
+        btn_go.connect("clicked", self._on_browser_go)
+        row_path.pack_start(btn_go, False, False, 0)
+
+        # Bảng hiển thị danh sách (TreeView)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        vbox.pack_start(scroll, True, True, 0)
+
+        # Store: Name (str), Type (str), Size (int), SizeStr (str)
+        self.store_browser = Gtk.ListStore(str, str, int, str)
+        self.tree_browser = Gtk.TreeView(model=self.store_browser)
+        self.tree_browser.set_headers_visible(True)
+        self.tree_browser.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
+        self.tree_browser.connect("row-activated", self._on_browser_row_activated)
+        
+        cols = [("Tên", 0, 300), ("Loại", 1, 100), ("Kích thước", 3, 100)]
+        for title, col_id, width in cols:
+            renderer = Gtk.CellRendererText()
+            col = Gtk.TreeViewColumn(title, renderer, text=col_id)
+            col.set_resizable(True)
+            col.set_min_width(width)
+            col.set_sort_column_id(col_id if col_id != 3 else 2) # Sort by size int
+            self.tree_browser.append_column(col)
+
+        scroll.add(self.tree_browser)
+
+        # Thanh công cụ: Tạo thư mục, Tạo file, Đổi tên, Xóa
+        row_tools = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        vbox.pack_start(row_tools, False, False, 0)
+
+        btn_new_dir = Gtk.Button(label="Thư mục mới")
+        btn_new_dir.connect("clicked", self._on_browser_new_dir)
+        row_tools.pack_start(btn_new_dir, False, False, 0)
+
+        btn_new_file = Gtk.Button(label="File mới")
+        btn_new_file.connect("clicked", self._on_browser_new_file)
+        row_tools.pack_start(btn_new_file, False, False, 0)
+
+        btn_rename = Gtk.Button(label="Đổi tên")
+        btn_rename.connect("clicked", self._on_browser_rename)
+        row_tools.pack_start(btn_rename, False, False, 0)
+
+        btn_delete = Gtk.Button(label="Xóa")
+        btn_delete.get_style_context().add_class("btn-danger")
+        btn_delete.connect("clicked", self._on_browser_delete)
+        row_tools.pack_end(btn_delete, False, False, 0)
+
+        self.sub_notebook.append_page(vbox, Gtk.Label(label="Duyệt File"))
+
+        # Load thư mục ban đầu
+        GLib.idle_add(self._load_browser_dir, self.entry_browser_path.get_text())
+
+    def _load_browser_dir(self, path: str) -> None:
+        path = os.path.abspath(path)
+        self.entry_browser_path.set_text(path)
+        thread = threading.Thread(target=self._do_load_browser_dir, args=(path,), daemon=True)
+        thread.start()
+
+    def _do_load_browser_dir(self, path: str) -> None:
+        try:
+            result = subprocess.run([self._backend, 'list', path], capture_output=True, text=True, timeout=5)
+            entries = []
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith("LIST|"):
+                    parts = line.split('|')
+                    if len(parts) >= 4:
+                        etype = parts[1]
+                        ename = parts[2]
+                        esize = int(parts[3])
+                        esize_str = format_bytes(esize) if etype == "file" else "--"
+                        entries.append((ename, etype, esize, esize_str))
+            
+            # Sort: dir first, then name
+            entries.sort(key=lambda x: (0 if x[1] == 'dir' else 1, x[0].lower()))
+            
+            GLib.idle_add(self._update_browser_store, entries)
+        except Exception as e:
+            GLib.idle_add(self._show_error, f"Lỗi liệt kê thư mục: {e}")
+
+    def _update_browser_store(self, entries: list) -> None:
+        self.store_browser.clear()
+        for entry in entries:
+            self.store_browser.append(list(entry))
+
+    def _on_browser_up(self, button) -> None:
+        path = self.entry_browser_path.get_text().strip()
+        parent = os.path.dirname(path)
+        if parent:
+            self._load_browser_dir(parent)
+
+    def _on_browser_go(self, *args) -> None:
+        path = self.entry_browser_path.get_text().strip()
+        if path:
+            self._load_browser_dir(path)
+
+    def _on_browser_row_activated(self, treeview, path, column) -> None:
+        model = treeview.get_model()
+        treeiter = model.get_iter(path)
+        name = model[treeiter][0]
+        etype = model[treeiter][1]
+        
+        current_dir = self.entry_browser_path.get_text().strip()
+        full_path = os.path.join(current_dir, name)
+        
+        if etype == "dir":
+            self._load_browser_dir(full_path)
+        else:
+            # Mở file trong tab Đọc/Ghi
+            self.entry_file.set_text(full_path)
+            self._selected_file = full_path
+            self._load_metadata(full_path)
+            thread = threading.Thread(target=self._do_read_file, args=(full_path,), daemon=True)
+            thread.start()
+            # Chuyển sang tab Đọc/Ghi (index 1 vì Duyệt File là 0)
+            self.sub_notebook.set_current_page(1)
+
+    def _get_browser_selected(self) -> str:
+        sel = self.tree_browser.get_selection()
+        model, treeiter = sel.get_selected()
+        if treeiter:
+            name = model[treeiter][0]
+            return os.path.join(self.entry_browser_path.get_text().strip(), name)
+        return ""
+
+    def _on_browser_new_dir(self, button) -> None:
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Nhập tên thư mục mới:"
+        )
+        entry = Gtk.Entry()
+        dialog.get_message_area().pack_start(entry, False, False, 0)
+        dialog.show_all()
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK and new_name:
+            path = os.path.join(self.entry_browser_path.get_text().strip(), new_name)
+            subprocess.run([self._backend, 'mkdir', path])
+            self._load_browser_dir(self.entry_browser_path.get_text().strip())
+
+    def _on_browser_new_file(self, button) -> None:
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text="Nhập tên file mới:"
+        )
+        entry = Gtk.Entry()
+        dialog.get_message_area().pack_start(entry, False, False, 0)
+        dialog.show_all()
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK and new_name:
+            path = os.path.join(self.entry_browser_path.get_text().strip(), new_name)
+            subprocess.run([self._backend, 'create_file', path])
+            self._load_browser_dir(self.entry_browser_path.get_text().strip())
+
+    def _on_browser_rename(self, button) -> None:
+        old_path = self._get_browser_selected()
+        if not old_path:
+            self._show_error("Vui lòng chọn mục cần đổi tên.")
+            return
+            
+        old_name = os.path.basename(old_path)
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            flags=0,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Đổi tên '{old_name}' thành:"
+        )
+        entry = Gtk.Entry()
+        entry.set_text(old_name)
+        dialog.get_message_area().pack_start(entry, False, False, 0)
+        dialog.show_all()
+        response = dialog.run()
+        new_name = entry.get_text().strip()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK and new_name and new_name != old_name:
+            new_path = os.path.join(os.path.dirname(old_path), new_name)
+            subprocess.run([self._backend, 'rename', old_path, new_path])
+            self._load_browser_dir(self.entry_browser_path.get_text().strip())
+
+    def _on_browser_delete(self, button) -> None:
+        path = self._get_browser_selected()
+        if not path:
+            self._show_error("Vui lòng chọn mục cần xóa.")
+            return
+            
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            flags=0,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=f"Xác nhận XÓA vĩnh viễn (đệ quy)?\n{path}\n\nThao tác này có thể sẽ hiển thị cửa sổ hỏi mật khẩu sudo."
+        )
+        response = dialog.run()
+        dialog.destroy()
+        
+        if response == Gtk.ResponseType.OK:
+            def delete_worker():
+                try:
+                    # pkexec rm -rf
+                    proc = subprocess.run(['pkexec', 'rm', '-rf', path], capture_output=True, text=True)
+                    if proc.returncode == 0:
+                        GLib.idle_add(self._load_browser_dir, self.entry_browser_path.get_text().strip())
+                        GLib.idle_add(self._show_info, "Xóa thành công.")
+                    else:
+                        GLib.idle_add(self._show_error, f"Lỗi xóa (pkexec failed): {proc.stderr}\n{proc.stdout}")
+                except Exception as e:
+                    GLib.idle_add(self._show_error, str(e))
+            
+            threading.Thread(target=delete_worker, daemon=True).start()
 
     # ═══════════════════════════════════════════════════════════
     # SUB-TAB 1: Đọc/Ghi
